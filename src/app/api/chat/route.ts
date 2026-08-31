@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
   try {
-    const { message } = await req.json();
+    const { message, image, model, webSearch, persona } = await req.json();
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
@@ -12,9 +12,8 @@ export async function POST(req: Request) {
 
     const ai = new GoogleGenAI({ apiKey });
 
-    // Generate real-time live date and time dynamically
     const now = new Date();
-    const options: Intl.DateTimeFormatOptions = { 
+    const liveDateTimeString = now.toLocaleString('en-US', { 
       weekday: 'long', 
       year: 'numeric', 
       month: 'long', 
@@ -23,20 +22,54 @@ export async function POST(req: Request) {
       minute: '2-digit', 
       second: '2-digit',
       hour12: true 
+    });
+
+    let contents: any = message;
+
+    if (image) {
+      const base64Data = image.split(",")[1];
+      const mimeType = image.split(";")[0].split(":")[1];
+      contents = [
+        message || "Describe this image",
+        {
+          inlineData: {
+            data: base64Data,
+            mimeType: mimeType
+          }
+        }
+      ];
+    }
+
+    // Strictly using gemini-3.6-flash as requested
+    let geminiModel = 'gemini-3.6-flash';
+
+    let systemPrompt = `You are Aura, an advanced AI assistant created by Sefvan. 
+Current exact live date and time: ${liveDateTimeString}. Always use 2026 as the current reference year. 
+Provide fast, accurate, sharp, and intelligent responses.`;
+
+    let config: any = {
+      systemInstruction: systemPrompt,
     };
-    const liveDateTimeString = now.toLocaleString('en-US', options);
+
+    if (webSearch || message.toLowerCase().includes("next") || message.toLowerCase().includes("today") || message.toLowerCase().includes("date") || message.toLowerCase().includes("time") || message.toLowerCase().includes("f1") || message.toLowerCase().includes("race")) {
+      config.tools = [{ googleSearch: {} }];
+    }
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
-      contents: message,
-      config: {
-        systemInstruction: `You are Aura, an AI assistant. The current live date and time right now is ${liveDateTimeString}. Always use this exact real-time information when the user asks about the date, year, time, or any live scheduling context.`,
-      },
+      model: geminiModel,
+      contents: contents,
+      config: config,
     });
 
     return NextResponse.json({ reply: response.text });
   } catch (error: any) {
     console.error("API Error Details:", error);
-    return NextResponse.json({ error: error.message || "Something went wrong" }, { status: 500 });
+    let errorMessage = error.message || "Something went wrong";
+    if (errorMessage.includes("429") || errorMessage.includes("Quota") || errorMessage.includes("RESOURCE_EXHAUSTED")) {
+      errorMessage = "Rate limit reached. Please wait about 15-20 seconds before sending the next message.";
+    } else if (errorMessage.includes("503") || errorMessage.includes("UNAVAILABLE")) {
+      errorMessage = "Gemini servers are experiencing high demand. Please try again in a moment.";
+    }
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }
